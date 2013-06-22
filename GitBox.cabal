@@ -10,7 +10,9 @@ executable gitboxd
     fsnotify >= 0.0.4,
     network >= 2.3.0,
     system-filepath,
-    text
+    text,
+    time,
+    process
 
 executable gitbox
   main-is: GitBox.hs

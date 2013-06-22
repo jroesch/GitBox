@@ -1,60 +1,90 @@
+{-# LANGUAGE OverloadedStrings #-}
 module GitBoxD where 
 
 import System.IO
+import Data.IORef
 import System.FSNotify
 import Network
 import System.Environment (getEnvironment, getArgs)
 import System.Exit
-import Data.Text (pack)
-import Filesystem.Path.CurrentOS (fromText)
+import qualified Data.Text as T
+import Filesystem.Path.CurrentOS (toText, fromText)
+import Data.Time.Clock (UTCTime(..), DiffTime(..), secondsToDiffTime)
+import Data.Time.Calendar (Day(..))
+import Text.Printf
+import Control.Monad
+import System.Cmd
 
 main :: IO ()
 main = do 
     argv <- getArgs 
     env <- getEnvironment
-    gbpath <- "GITBOX_PATH" `lookup` env
-    checkConfig gbpath 
-    wm <- startManager
-    forAllIn gbpath listE wm
-    run 
-    stopManager wm
-    putStrLn "Done."
+    case "GITBOX_PATH" `lookup` env of
+      Nothing   -> error "No GITBOX_PATH found."
+      Just path -> do 
+        wm <- startManager
+        system "cd " ++ path
+        (path `eachFile` trackInGit) wm
+        run 
+        stopManager wm
+        putStrLn "Shutting down..."
 
-checkConfig :: Maybe String -> IO ()
-checkConfig pt = case pt of 
-  Nothing   -> putStrLn "Not configured."
-  Just path -> return ()
+pathFromString s = fromText $ T.pack s
 
--- run a daemon that does all git interation and commits, then make gitbox command line tool just talk to the daemon 
---pFromString :: String -> FilePath
-pFromString s = fromText $ pack s
+eachFile :: String -> (Event -> IO ()) -> WatchManager -> IO ()
+eachFile path h wm = watchTree wm (pathFromString path) (\_ -> True) h
 
-forAllIn :: String -> (Event -> IO ()) -> WatchManager -> IO ()
-forAllIn path h = 
-    \wm -> watchTree wm (pFromString path) (\_ -> True) h
+lastTimeStamp :: IO (IORef UTCTime)
+lastTimeStamp = newIORef (UTCTime (ModifiedJulianDay 0) (secondsToDiffTime 0))
+  
+run :: IO ()
+run = do 
+  socket <- listenOn $ PortNumber 9000
+  (clientH, _, _) <- accept socket
+  handleRequests clientH
+  sClose socket
+
+handleRequests :: Handle -> IO ()
+handleRequests  h = do 
+  eof <- hIsEOF h
+  case eof of
+    True  -> return ()
+    False -> do
+      line <- hGetLine h
+      case line of
+        "exit" -> exitSuccess
+        _      -> (print line) >> handleRequests h
+
+addMsg :: String
+addMsg = "add %s at %s"
+
+modMsg :: String
+modMsg = "update %s at %s"
+
+rmvMsg :: String
+rmvMsg = "remove %s at %s"
+
+commitCmd :: String
+commitCmd = "cgit add %s; git commit -am \"%s\""
+
+-- split this into many function, need to ignore .git directory
+-- and make sure I set the working directory correctly
+trackInGit e = do 
+    let (msg, path, time) = case e of
+                              Added p time    -> (addMsg, p, time)
+                              Modified p time -> (modMsg, p, time)
+                              Removed p time  -> (rmvMsg, p, time)
+    let rawPath = (case toText path of
+                    Right p -> T.unpack p
+                    Left p  -> T.unpack p) :: String
+        commitMsg = (printf msg rawPath $ show time) :: String
+    lastCommitRef <- lastTimeStamp
+    lastCommit <- readIORef lastCommitRef
+    when (lastCommit < time) $ do 
+      writeIORef lastCommitRef time
+      let cmd = printf commitCmd rawPath commitMsg
+      system cmd
+      return ()
+    
 
 
-listE :: Event -> IO ()
-listE = \e -> case e of 
-  Added    p time -> putStrLn p
-  Modified p time -> putStrLn p
-  Removed  p time -> putStrLn p
-
--- this networking code is nap as fuck, fix lates motherfucker
--- loop this shit 
-run = do socket <- listenOn $ PortNumber $ fromIntegral 9000
-         rloop socket 
-         sClose socket
-    where 
-        req h = 
-            do eof <- hIsEOF h
-               case eof of 
-                 True  -> return ()
-                 False -> do line <- hGetLine h 
-                             case line of
-                                "exit" -> exitWith ExitSuccess
-                                _      -> (print line) >> req h
-
-        rloop sock = do (client, _, _) <- accept sock
-                        req client
-                        rloop sock
