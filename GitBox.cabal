@@ -18,6 +18,7 @@ executable gitbox
   main-is: GitBox.hs
   build-depends:
     base >= 4 && <= 5,
+    containers,
     network >= 2.3.0
 
 

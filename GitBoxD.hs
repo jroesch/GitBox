@@ -1,6 +1,4 @@
 {-# LANGUAGE OverloadedStrings #-}
-module GitBoxD where 
-
 import System.IO
 import Data.IORef
 import System.FSNotify
@@ -23,7 +21,7 @@ main = do
       Nothing   -> error "No GITBOX_PATH found."
       Just path -> do 
         wm <- startManager
-        system "cd " ++ path
+        system $ "cd " ++ path
         (path `eachFile` trackInGit) wm
         run 
         stopManager wm
